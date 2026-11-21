@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unterrichts-Timer</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root{
+    --bg:#ffffff; --ink:#1e2a38; --muted:#6b7785; --line:#e3e7ec;
+    --btn:#f2f4f7; --btn-ink:#1e2a38; --accent:#1e3a5f;
+    --ok:#2e9e5b; --warn:#f2a236; --alarm:#d63b3b;
+    --bar:var(--ok);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--ink);
+    font-family:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;
+    overflow:hidden;user-select:none;-webkit-user-select:none}
+  body{display:flex;flex-direction:column;padding:2.5vmin;gap:2vmin}
+  body.dark{--bg:#1b2430;--ink:#f3f5f8;--muted:#9aa6b3;--line:#334050;--btn:#2a3543;--btn-ink:#f3f5f8}
+
+  /* Anzeige */
+  #stage{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;position:relative;cursor:pointer}
+  #time{font-variant-numeric:tabular-nums;font-weight:700;line-height:1;letter-spacing:-.02em;white-space:nowrap;transition:color .3s}
+  #label{color:var(--muted);font-weight:600;margin-top:.6vmin;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+  #label:empty{display:none}
+  .bar{width:100%;height:max(6px,2.2vmin);background:var(--line);border-radius:99px;overflow:hidden;flex:none}
+  .bar>i{display:block;height:100%;width:100%;background:var(--bar);border-radius:99px;transition:width .25s linear,background .4s}
+
+  body.warn{--bar:var(--warn)}
+  body.warn #time{color:var(--warn)}
+  body.done{--bar:var(--alarm)}
+  body.done #time{color:var(--alarm);animation:blink 1s steps(2,start) infinite}
+  @keyframes blink{to{opacity:.25}}
+
+  /* Steuerung */
+  #controls{flex:none;display:flex;flex-direction:column;gap:1.6vmin;transition:opacity .3s}
+  .row{display:flex;gap:1.4vmin;justify-content:center;flex-wrap:wrap}
+  button{font:inherit;font-weight:600;font-size:max(12px,3.6vmin);border:0;border-radius:1.4vmin;
+    background:var(--btn);color:var(--btn-ink);padding:1.2vmin 2.4vmin;cursor:pointer;min-width:6vmin}
+  button:hover{filter:brightness(.95)}
+  button:active{transform:translateY(1px)}
+  button.primary{background:var(--accent);color:#fff;min-width:22vmin}
+  body.dark button.primary{background:#3c78c3}
+  button.chip{font-size:max(11px,3vmin);padding:.9vmin 2vmin;border-radius:99px}
+  button.chip.on{background:var(--accent);color:#fff}
+  .sep{width:1px;background:var(--line);margin:0 .6vmin}
+
+  /* Während der Timer läuft: Steuerung dezent */
+  body.running #setRow, body.running #presetRow{display:none}
+  body.running #controls{opacity:.18}
+  body.running #controls:hover{opacity:1}
+
+  /* Kompaktmodus (Steuerung ausgeblendet) */
+  body.compact #controls{display:none}
+  #toggleUi{position:absolute;top:0;right:0;font-size:max(11px,2.6vmin);padding:.6vmin 1.4vmin;opacity:.0;min-width:0}
+  body:hover #toggleUi{opacity:.6}
+  #toggleUi:hover{opacity:1}
+
+  /* Bearbeiten-Dialog */
+  #edit{position:absolute;inset:0;background:var(--bg);display:none;flex-direction:column;gap:2vmin;padding:3vmin;z-index:5;overflow:auto}
+  #edit.open{display:flex}
+  #edit label{font-size:max(12px,3.4vmin);font-weight:600;display:flex;flex-direction:column;gap:.8vmin}
+  #edit input[type=text],#edit input[type=number]{font:inherit;font-size:max(12px,3.6vmin);padding:1vmin 1.4vmin;border:1px solid var(--line);border-radius:1vmin;background:var(--bg);color:var(--ink)}
+  #edit .chk{flex-direction:row;align-items:center;gap:1.4vmin;font-weight:500}
+  #edit .chk input{width:max(14px,3.4vmin);height:max(14px,3.4vmin)}
+  #edit .mmss{display:flex;gap:1.4vmin;align-items:center}
+  #edit .mmss input{width:14vmin}
+</style>
+</head>
+<body>
+  <div id="stage" title="Klicken: Start / Pause">
+    <div id="time">05:00</div>
+    <div id="label"></div>
+    <button id="toggleUi" title="Bedienelemente ein-/ausblenden">⚙</button>
+  </div>
+  <div class="bar"><i id="fill"></i></div>
+
+  <div id="controls">
+    <div class="row" id="setRow">
+      <button data-add="-60" title="−1 Minute">−1′</button>
+      <button data-add="-10" title="−10 Sekunden">−10″</button>
+      <button data-add="10" title="+10 Sekunden">+10″</button>
+      <button data-add="60" title="+1 Minute">+1′</button>
+    </div>
+    <div class="row" id="presetRow">
+      <button class="chip" data-preset="60">1</button>
+      <button class="chip" data-preset="120">2</button>
+      <button class="chip" data-preset="180">3</button>
+      <button class="chip" data-preset="300">5</button>
+      <button class="chip" data-preset="600">10</button>
+      <button class="chip" data-preset="900">15</button>
+      <button class="chip" data-preset="1200">20</button>
+    </div>
+    <div class="row">
+      <button id="startBtn" class="primary">▶ Start</button>
+      <button id="resetBtn" title="Zurücksetzen">↺</button>
+      <span class="sep"></span>
+      <button id="soundBtn" title="Signalton am Ende">🔔</button>
+      <button id="editBtn" title="Einstellungen">✎</button>
+    </div>
+  </div>
+
+  <div id="edit">
+    <label>Bezeichnung (optional, z. B. „Arbeitsphase“)
+      <input type="text" id="inLabel" maxlength="40">
+    </label>
+    <label>Startzeit
+      <span class="mmss"><input type="number" id="inMin" min="0" max="180"> min
+      <input type="number" id="inSec" min="0" max="59"> s</span>
+    </label>
+    <label>Warnfarbe ab (Sekunden Restzeit)
+      <input type="number" id="inWarn" min="0" max="3600">
+    </label>
+    <label class="chk"><input type="checkbox" id="inSound"> Signalton am Ende</label>
+    <label class="chk"><input type="checkbox" id="inDark"> Dunkle Darstellung</label>
+    <label class="chk"><input type="checkbox" id="inCompact"> Nur Zeit anzeigen (Bedienung über ⚙)</label>
+    <label class="chk"><input type="checkbox" id="inUp"> Nach Ablauf weiterzählen (+00:15 …)</label>
+    <div class="row">
+      <button id="saveBtn" class="primary">Übernehmen</button>
+      <button id="cancelBtn">Abbrechen</button>
+    </div>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+  const DEFAULTS = {duration:300, label:"", warn:60, sound:true, dark:false, compact:false, overtime:false};
+  let cfg = Object.assign({}, DEFAULTS);
+  let remaining = cfg.duration;   // Sekunden (Ganzzahl-Anzeige)
+  let endAt = null;               // Zeitstempel, wenn läuft
+  let tick = null;
+  let rang = false;
+  let officeReady = false;
+
+  const $ = id => document.getElementById(id);
+  const body = document.body;
+
+  /* ---------- Einstellungen speichern (pro Timer auf der Folie) ---------- */
+  function loadSettings(){
+    try{
+      const s = Office.context.document.settings.get("timerCfg");
+      if (s) cfg = Object.assign({}, DEFAULTS, JSON.parse(s));
+    }catch(e){
+      try{ const s = localStorage.getItem("timerCfg"); if(s) cfg = Object.assign({}, DEFAULTS, JSON.parse(s)); }catch(_){}
+    }
+  }
+  function saveSettings(){
+    const s = JSON.stringify(cfg);
+    if (officeReady){
+      try{
+        Office.context.document.settings.set("timerCfg", s);
+        Office.context.document.settings.saveAsync(function(){});
+        return;
+      }catch(e){}
+    }
+    try{ localStorage.setItem("timerCfg", s); }catch(_){}
+  }
+
+  /* ---------- Anzeige ---------- */
+  function fmt(sec){
+    const neg = sec < 0; sec = Math.abs(sec);
+    const h = Math.floor(sec/3600), m = Math.floor(sec%3600/60), s = sec%60;
+    const p = n => String(n).padStart(2,"0");
+    return (neg ? "+" : "") + (h ? h + ":" + p(m) : p(m)) + ":" + p(s);
+  }
+
+  function fitText(){
+    const stage = $("stage"), t = $("time"), lab = $("label");
+    const W = stage.clientWidth, H = stage.clientHeight;
+    const labH = cfg.label ? 0.16 : 0;
+    lab.style.fontSize = Math.max(10, H*0.11) + "px";
+    t.style.fontSize = "100px";
+    const w = t.scrollWidth || 1;
+    const size = Math.min(100 * (W*0.96) / w, H * (1 - labH) * 0.95);
+    t.style.fontSize = Math.max(12, size) + "px";
+  }
+
+  function render(){
+    const running = endAt !== null;
+    $("time").textContent = fmt(remaining);
+    $("label").textContent = cfg.label;
+    const frac = cfg.duration > 0 ? Math.max(0, remaining) / cfg.duration : 0;
+    $("fill").style.width = (frac*100).toFixed(2) + "%";
+    body.classList.toggle("running", running);
+    body.classList.toggle("done", remaining <= 0 && (running || rang));
+    const warnAt = Math.min(cfg.warn, Math.floor(cfg.duration*0.25));
+    body.classList.toggle("warn", remaining > 0 && remaining <= warnAt && warnAt > 0 && (running || remaining < cfg.duration));
+    body.classList.toggle("dark", cfg.dark);
+    body.classList.toggle("compact", cfg.compact);
+    $("startBtn").textContent = running ? "❚❚ Pause" : (remaining < cfg.duration && remaining > 0 ? "▶ Weiter" : "▶ Start");
+    $("soundBtn").textContent = cfg.sound ? "🔔" : "🔕";
+    document.querySelectorAll("[data-preset]").forEach(b =>
+      b.classList.toggle("on", +b.dataset.preset === cfg.duration));
+    fitText();
+  }
+
+  /* ---------- Signalton (ohne Audiodatei) ---------- */
+  let actx = null;
+  function unlockAudio(){
+    try{ if(!actx) actx = new (window.AudioContext||window.webkitAudioContext)(); if(actx.state==="suspended") actx.resume(); }catch(_){}
+  }
+  function gong(){
+    if(!cfg.sound || !actx) return;
+    const now = actx.currentTime;
+    [0, 0.45, 0.9].forEach((d,i) => {
+      [523.25, 659.25, 783.99].forEach((f,j) => {
+        const o = actx.createOscillator(), g = actx.createGain();
+        o.type = "sine"; o.frequency.value = f * (i===2 ? 2 : 1);
+        g.gain.setValueAtTime(0.0001, now+d);
+        g.gain.exponentialRampToValueAtTime(0.25/(j+1), now+d+0.02);
+        g.gain.exponentialRampToValueAtTime(0.0001, now+d+1.2);
+        o.connect(g).connect(actx.destination); o.start(now+d); o.stop(now+d+1.3);
+      });
+    });
+  }
+
+  /* ---------- Ablauf ---------- */
+  function step(){
+    const r = Math.ceil((endAt - Date.now())/1000);
+    if (r !== remaining){ remaining = r; }
+    if (remaining <= 0 && !rang){ rang = true; gong(); }
+    if (remaining <= 0 && !cfg.overtime){ remaining = 0; stop(); }
+    render();
+  }
+  function start(){
+    if (endAt !== null) return;
+    unlockAudio();
+    if (remaining <= 0){ remaining = cfg.duration; rang = false; }
+    endAt = Date.now() + remaining*1000;
+    tick = setInterval(step, 200);
+    render();
+  }
+  function stop(){
+    if (tick) clearInterval(tick);
+    tick = null; endAt = null;
+    render();
+  }
+  function toggle(){ endAt === null ? start() : stop(); }
+  function reset(){ stop(); rang = false; remaining = cfg.duration; render(); }
+  function setDuration(sec){
+    sec = Math.max(5, Math.min(sec, 3*3600));
+    cfg.duration = sec; saveSettings(); reset();
+  }
+
+  /* ---------- Bedienung ---------- */
+  document.querySelectorAll("[data-add]").forEach(b => b.addEventListener("click", () => {
+    if (endAt !== null) return;
+    setDuration(cfg.duration + (+b.dataset.add));
+  }));
+  document.querySelectorAll("[data-preset]").forEach(b => b.addEventListener("click", () => setDuration(+b.dataset.preset)));
+  $("startBtn").addEventListener("click", toggle);
+  $("resetBtn").addEventListener("click", reset);
+  $("stage").addEventListener("click", e => { if (e.target.id !== "toggleUi") toggle(); });
+  $("soundBtn").addEventListener("click", () => { cfg.sound = !cfg.sound; unlockAudio(); saveSettings(); render(); });
+  $("toggleUi").addEventListener("click", e => { e.stopPropagation(); cfg.compact = !cfg.compact; saveSettings(); render(); });
+
+  $("editBtn").addEventListener("click", () => {
+    stop();
+    $("inLabel").value = cfg.label;
+    $("inMin").value = Math.floor(cfg.duration/60);
+    $("inSec").value = cfg.duration%60;
+    $("inWarn").value = cfg.warn;
+    $("inSound").checked = cfg.sound;
+    $("inDark").checked = cfg.dark;
+    $("inCompact").checked = cfg.compact;
+    $("inUp").checked = cfg.overtime;
+    $("edit").classList.add("open");
+  });
+  $("cancelBtn").addEventListener("click", () => $("edit").classList.remove("open"));
+  $("saveBtn").addEventListener("click", () => {
+    cfg.label = $("inLabel").value.trim();
+    cfg.warn = Math.max(0, parseInt($("inWarn").value,10) || 0);
+    cfg.sound = $("inSound").checked;
+    cfg.dark = $("inDark").checked;
+    cfg.compact = $("inCompact").checked;
+    cfg.overtime = $("inUp").checked;
+    const sec = (parseInt($("inMin").value,10)||0)*60 + (parseInt($("inSec").value,10)||0);
+    $("edit").classList.remove("open");
+    setDuration(sec || 60);
+  });
+
+  document.addEventListener("keydown", e => {
+    if ($("edit").classList.contains("open")) return;
+    if (e.code === "Space" || e.key === "Enter"){ e.preventDefault(); toggle(); }
+    else if (e.key === "r" || e.key === "R" || e.key === "Escape"){ reset(); }
+    else if (e.key === "+" || e.key === "ArrowUp"){ if(endAt===null) setDuration(cfg.duration+60); }
+    else if (e.key === "-" || e.key === "ArrowDown"){ if(endAt===null) setDuration(cfg.duration-60); }
+  });
+
+  new ResizeObserver(fitText).observe($("stage"));
+
+  function init(){ loadSettings(); remaining = cfg.duration; render(); }
+
+  if (window.Office && Office.onReady){
+    Office.onReady(() => { officeReady = !!(Office.context && Office.context.document); init(); });
+  } else {
+    init(); // Test im normalen Browser
+  }
+})();
+</script>
+</body>
+</html>
