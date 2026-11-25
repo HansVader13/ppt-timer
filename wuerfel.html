@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Würfel</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+  :root{
+    --bg:#ffffff; --ink:#1e2a38; --muted:#6b7785; --line:#e3e7ec; --btn:#f2f4f7;
+    --die:#ffffff; --die-edge:#cfd6de; --pip:#1e2a38; --accent:#1e3a5f;
+  }
+  body.dark{--bg:#1b2430; --ink:#f3f5f8; --muted:#9aa6b3; --line:#334050; --btn:#2a3543}
+  body.red{--die:#d63b3b; --die-edge:#a82a2a; --pip:#ffffff}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--ink);overflow:hidden;
+    font-family:"Segoe UI",system-ui,-apple-system,Roboto,Arial,sans-serif;user-select:none;-webkit-user-select:none}
+  body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3vmin;padding:3vmin}
+
+  #wrap{flex:1;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  #die{
+    position:relative;width:200px;height:200px;flex:none;
+    background:var(--die);border:max(2px,.7vmin) solid var(--die-edge);border-radius:18%;
+    box-shadow:0 4em 0 var(--die-edge), 0 7em 12em rgba(0,0,0,.18);
+    transition:transform .15s;
+  }
+  #die:hover{transform:translateY(-1.5em)}
+  #die i{position:absolute;width:19%;height:19%;border-radius:50%;background:var(--pip);transform:translate(-50%,-50%);visibility:hidden}
+  #die i.on{visibility:visible}
+  #die.rolling{animation:shake .12s linear infinite}
+  @keyframes shake{
+    0%{transform:rotate(-14deg) translate(-2%,1%)}
+    25%{transform:rotate(9deg) translate(2%,-2%)}
+    50%{transform:rotate(-6deg) translate(1%,2%)}
+    75%{transform:rotate(12deg) translate(-1%,-1%)}
+    100%{transform:rotate(-14deg) translate(-2%,1%)}
+  }
+  #die.land{animation:land .35s ease-out}
+  @keyframes land{0%{transform:scale(1.12)}60%{transform:scale(.96)}100%{transform:scale(1)}}
+
+  #hint{color:var(--muted);font-size:max(11px,3.2vmin);font-weight:600;height:1.3em}
+  #history{display:flex;gap:1.2vmin;flex-wrap:nowrap;overflow:hidden;min-height:max(18px,6vmin);align-items:center}
+  #history span{font-weight:700;font-size:max(11px,3.4vmin);min-width:max(18px,6vmin);height:max(18px,6vmin);
+    display:grid;place-items:center;border-radius:1.2vmin;background:var(--btn);color:var(--ink)}
+  #history span:first-child{background:var(--accent);color:#fff}
+  body.nohist #history{display:none}
+
+  #menuBtn{position:absolute;top:1.5vmin;right:1.5vmin;border:0;background:var(--btn);color:var(--ink);
+    border-radius:1vmin;font-size:max(12px,3vmin);padding:.6vmin 1.4vmin;cursor:pointer;opacity:0;transition:opacity .2s}
+  body:hover #menuBtn{opacity:.7}
+  #menuBtn:hover{opacity:1}
+  #menu{position:absolute;top:calc(1.5vmin + max(26px,6vmin));right:1.5vmin;background:var(--bg);border:1px solid var(--line);
+    border-radius:1.4vmin;padding:1.6vmin 2vmin;display:none;flex-direction:column;gap:1.2vmin;z-index:5;
+    box-shadow:0 1vmin 3vmin rgba(0,0,0,.15);font-size:max(12px,3.2vmin)}
+  #menu.open{display:flex}
+  #menu label{display:flex;gap:1.2vmin;align-items:center;cursor:pointer;white-space:nowrap}
+  #menu input{width:max(14px,3.2vmin);height:max(14px,3.2vmin)}
+  #menu button{font:inherit;font-weight:600;border:0;border-radius:1vmin;background:var(--btn);color:var(--ink);padding:.8vmin 1.6vmin;cursor:pointer}
+</style>
+</head>
+<body>
+  <div id="wrap" title="Klicken zum Würfeln">
+    <div id="die" aria-live="polite" aria-label="Würfel">
+      <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+    </div>
+  </div>
+  <div id="hint">Klicken zum Würfeln</div>
+  <div id="history"></div>
+
+  <button id="menuBtn" title="Einstellungen">⚙</button>
+  <div id="menu">
+    <label><input type="checkbox" id="optHist"> Letzte Würfe anzeigen</label>
+    <label><input type="checkbox" id="optSound"> Würfelgeräusch</label>
+    <label><input type="checkbox" id="optRed"> Roter Würfel</label>
+    <label><input type="checkbox" id="optDark"> Dunkler Hintergrund</label>
+    <button id="clearBtn">Verlauf löschen</button>
+  </div>
+
+<script>
+(function(){
+  "use strict";
+  // Augen-Positionen im 3×3-Raster (0..8, zeilenweise)
+  const FACES = {
+    1:[4], 2:[2,6], 3:[2,4,6], 4:[0,2,6,8], 5:[0,2,4,6,8], 6:[0,2,3,5,6,8]
+  };
+  const DEFAULTS = {hist:true, sound:true, red:false, dark:false};
+  let cfg = Object.assign({}, DEFAULTS);
+  let history = [];
+  let rolling = false;
+  let officeReady = false;
+  const $ = id => document.getElementById(id);
+  const pips = [...document.querySelectorAll("#die i")];
+
+  /* Fairer Zufall 1–6 (ohne Modulo-Verzerrung) */
+  function rnd6(){
+    const a = new Uint8Array(1);
+    do { crypto.getRandomValues(a); } while (a[0] >= 252);
+    return (a[0] % 6) + 1;
+  }
+
+  // Augen absolut platzieren (Spalten/Zeilen bei 26 %, 50 %, 74 %)
+  const POS = [26,50,74];
+  pips.forEach((p,i) => { p.style.left = POS[i%3]+"%"; p.style.top = POS[Math.floor(i/3)]+"%"; });
+
+  // Würfelgröße an den verfügbaren Platz anpassen
+  function fit(){
+    const w = $("wrap"), size = Math.max(40, Math.min(w.clientWidth, w.clientHeight) * 0.86);
+    $("die").style.width = $("die").style.height = size + "px"; $("die").style.fontSize = (size/100) + "px";
+  }
+  new ResizeObserver(fit).observe($("wrap"));
+
+  function show(n){
+    pips.forEach((p,i) => p.classList.toggle("on", FACES[n].includes(i)));
+    $("die").setAttribute("aria-label", "Würfel zeigt " + n);
+  }
+
+  function renderHistory(){
+    $("history").innerHTML = history.slice(0,10).map(n => "<span>"+n+"</span>").join("");
+  }
+
+  function applyCfg(){
+    document.body.classList.toggle("nohist", !cfg.hist);
+    document.body.classList.toggle("red", cfg.red);
+    document.body.classList.toggle("dark", cfg.dark);
+    $("optHist").checked = cfg.hist; $("optSound").checked = cfg.sound;
+    $("optRed").checked = cfg.red;  $("optDark").checked = cfg.dark;
+  }
+
+  /* Einstellungen pro Würfel auf der Folie speichern */
+  function load(){
+    try{ const s = Office.context.document.settings.get("diceCfg"); if(s) cfg = Object.assign({}, DEFAULTS, JSON.parse(s)); }
+    catch(e){ try{ const s = localStorage.getItem("diceCfg"); if(s) cfg = Object.assign({}, DEFAULTS, JSON.parse(s)); }catch(_){} }
+  }
+  function save(){
+    const s = JSON.stringify(cfg);
+    if (officeReady){ try{ Office.context.document.settings.set("diceCfg", s); Office.context.document.settings.saveAsync(()=>{}); return; }catch(e){} }
+    try{ localStorage.setItem("diceCfg", s); }catch(_){}
+  }
+
+  /* Klappergeräusch per WebAudio (keine Audiodatei nötig) */
+  let actx = null;
+  function clack(vol){
+    if (!cfg.sound) return;
+    try{
+      if (!actx) actx = new (window.AudioContext||window.webkitAudioContext)();
+      if (actx.state === "suspended") actx.resume();
+      const len = Math.floor(actx.sampleRate * 0.03);
+      const buf = actx.createBuffer(1, len, actx.sampleRate), d = buf.getChannelData(0);
+      for (let i=0;i<len;i++) d[i] = (Math.random()*2-1) * Math.pow(1 - i/len, 3);
+      const src = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+      f.type = "bandpass"; f.frequency.value = 1800 + Math.random()*1500; f.Q.value = 2;
+      g.gain.value = vol;
+      src.buffer = buf; src.connect(f).connect(g).connect(actx.destination); src.start();
+    }catch(_){}
+  }
+
+  function roll(){
+    if (rolling) return;
+    rolling = true;
+    $("menu").classList.remove("open");
+    const die = $("die");
+    die.classList.remove("land"); die.classList.add("rolling");
+    $("hint").textContent = "…";
+    const result = rnd6();
+    let t = 0, delay = 45, last = 0;
+    (function spin(){
+      let n; do { n = rnd6(); } while (n === last); last = n;
+      show(n); clack(0.35);
+      t += delay; delay *= 1.12;
+      if (t < 900) setTimeout(spin, delay);
+      else {
+        show(result);
+        die.classList.remove("rolling"); void die.offsetWidth; die.classList.add("land");
+        clack(0.8);
+        history.unshift(result); renderHistory();
+        $("hint").textContent = "Klicken zum Würfeln";
+        rolling = false;
+      }
+    })();
+  }
+
+  $("wrap").addEventListener("click", roll);
+  document.addEventListener("keydown", e => {
+    if (e.code === "Space" || e.key === "Enter"){ e.preventDefault(); roll(); }
+  });
+  $("menuBtn").addEventListener("click", e => { e.stopPropagation(); $("menu").classList.toggle("open"); });
+  [["optHist","hist"],["optSound","sound"],["optRed","red"],["optDark","dark"]].forEach(([id,key]) =>
+    $(id).addEventListener("change", () => { cfg[key] = $(id).checked; save(); applyCfg(); }));
+  $("clearBtn").addEventListener("click", () => { history = []; renderHistory(); });
+
+  function init(){ load(); applyCfg(); show(rnd6()); renderHistory(); }
+  if (window.Office && Office.onReady){
+    Office.onReady(() => { officeReady = !!(Office.context && Office.context.document); init(); });
+  } else { init(); }
+})();
+</script>
+</body>
+</html>
